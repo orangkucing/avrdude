@@ -202,7 +202,7 @@ sudo apt install git make gcc automake libtool flex bison libelf-dev libusb-dev 
 To build AVRDUDE on Linux, run the following commands:
 
 ```bash
-git clone --branch linux https://github.com/mariusgreuel/avrdude
+git clone --branch windows https://github.com/mariusgreuel/avrdude
 cd avrdude
 ./bootstrap
 ./configure
