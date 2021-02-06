@@ -80,6 +80,7 @@ typedef struct pdata
     usb_dev_handle* usb_handle;
     // Extended parameters
     bool wait_until_device_present;
+    int wait_timout;            // in seconds
     // Bootloader version
     uint8_t major_version;
     uint8_t minor_version;
@@ -673,6 +674,7 @@ static int micronucleus_open(PROGRAMMER* pgm, char* port)
 
     bool show_retry_message = true;
 
+    int time_ms = 0;
     for (;;)
     {
         usb_find_busses();
@@ -727,13 +729,27 @@ static int micronucleus_open(PROGRAMMER* pgm, char* port)
         {
             if (show_retry_message)
             {
-                avrdude_message(MSG_INFO, "%s: No device found, waiting for device...\n", progname);
+                if (pdata->wait_timout < 0)
+                {
+                    avrdude_message(MSG_INFO, "%s: No device found, waiting for device to be plugged in...\n", progname);
+                }
+                else
+                {
+                    avrdude_message(MSG_INFO, "%s: No device found, waiting %d seconds for device to be plugged in...\n",
+                        progname,
+                        pdata->wait_timout);
+                }
+
                 avrdude_message(MSG_INFO, "%s: Press CTRL-C to terminate.\n", progname);
                 show_retry_message = false;
             }
 
-            delay_ms(MICRONUCLEUS_CONNECT_WAIT);
-            continue;
+            if (pdata->wait_timout < 0 || time_ms < pdata->wait_timout * 1000)
+            {
+                delay_ms(MICRONUCLEUS_CONNECT_WAIT);
+                time_ms += MICRONUCLEUS_CONNECT_WAIT;
+                continue;
+            }
         }
 
         break;
@@ -870,6 +886,12 @@ static int micronucleus_parseextparams(PROGRAMMER* pgm, LISTID xparams)
         if (strcmp(param, "wait") == 0)
         {
             pdata->wait_until_device_present = true;
+            pdata->wait_timout = -1;
+        }
+        else if (strncmp(param, "wait=", 5) == 0)
+        {
+            pdata->wait_until_device_present = true;
+            pdata->wait_timout = atoi(param + 5);
         }
         else
         {
@@ -923,4 +945,4 @@ void micronucleus_initpgm(PROGRAMMER* pgm)
 
 #endif /* HAVE_LIBUSB */
 
-const char micronucleus_desc[] = "Micronucleus bootloader";
+const char micronucleus_desc[] = "Micronucleus Bootloader";
