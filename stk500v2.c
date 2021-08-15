@@ -1250,6 +1250,7 @@ static int stk500v2_initialize(PROGRAMMER * pgm, AVRPART * p)
   AVRMEM * m;
 
   if ((PDATA(pgm)->pgmtype == PGMTYPE_STK600 ||
+       PDATA(pgm)->pgmtype == PGMTYPE_STK500 ||
        PDATA(pgm)->pgmtype == PGMTYPE_AVRISP_MKII ||
        PDATA(pgm)->pgmtype == PGMTYPE_JTAGICE_MKII) != 0
       && (p->flags & (AVRPART_HAS_PDI | AVRPART_HAS_TPI)) != 0) {
@@ -3707,8 +3708,10 @@ static int stk600_xprog_program_enable(PROGRAMMER * pgm, AVRPART * p)
 {
     unsigned char buf[16];
     unsigned int eepagesize = 42;
+    unsigned int flashpagesize = 256;
     unsigned int nvm_base;
-    AVRMEM *mem = NULL;
+    AVRMEM *eepmem = NULL;
+    AVRMEM *flashmem = NULL;
     int use_tpi;
 
     use_tpi = (p->flags & AVRPART_HAS_TPI) != 0;
@@ -3719,13 +3722,21 @@ static int stk600_xprog_program_enable(PROGRAMMER * pgm, AVRPART * p)
                             progname);
             return -1;
         }
-        if ((mem = avr_locate_mem(p, "eeprom")) != NULL) {
-            if (mem->page_size == 0) {
+        if ((eepmem = avr_locate_mem(p, "eeprom")) != NULL) {
+            if (eepmem->page_size == 0) {
                 avrdude_message(MSG_INFO, "%s: stk600_xprog_program_enable(): no EEPROM page_size parameter for PDI device\n",
                                 progname);
                 return -1;
             }
-            eepagesize = mem->page_size;
+            eepagesize = eepmem->page_size;
+        }
+        if ((flashmem = avr_locate_mem(p, "flash")) != NULL) {
+            if (flashmem->page_size == 0) {
+                avrdude_message(MSG_INFO, "%s: stk600_xprog_program_enable(): no flash page_size parameter for PDI device\n",
+                                progname);
+                return -1;
+            }
+            flashpagesize = flashmem->page_size;
         }
     }
 
@@ -3790,13 +3801,24 @@ static int stk600_xprog_program_enable(PROGRAMMER * pgm, AVRPART * p)
             return -1;
         }
 
-        if (mem != NULL) {
+        if (eepmem != NULL) {
             buf[0] = XPRG_CMD_SET_PARAM;
             buf[1] = XPRG_PARAM_EEPPAGESIZE;
             buf[2] = eepagesize >> 8;
             buf[3] = eepagesize;
             if (stk600_xprog_command(pgm, buf, 4, 2) < 0) {
                 avrdude_message(MSG_INFO, "%s: stk600_xprog_program_enable(): XPRG_CMD_SET_PARAM(XPRG_PARAM_EEPPAGESIZE) failed\n",
+                                progname);
+                return -1;
+            }
+        }
+        if (flashmem != NULL) {
+            buf[0] = XPRG_CMD_SET_PARAM;
+            buf[1] = 5; /* this should be defined in stk500v2_private.h as XPRG_PARAM_FLASHPAGESIZE */
+            buf[2] = flashpagesize >> 8;
+            buf[3] = flashpagesize;
+            if (stk600_xprog_command(pgm, buf, 4, 2) < 0) {
+                avrdude_message(MSG_INFO, "%s: stk600_xprog_program_enable(): XPRG_CMD_SET_PARAM(XPRG_PARAM_FLASHPAGESIZE) failed\n",
                                 progname);
                 return -1;
             }
@@ -4066,6 +4088,7 @@ static int stk600_xprog_paged_write(PROGRAMMER * pgm, AVRPART * p, AVRMEM * mem,
     size_t writesize;
     unsigned long use_ext_addr = 0;
     unsigned char writemode;
+    int need_erase = 0;
 
     /*
      * The XPROG read command supports at most 256 bytes in one
@@ -4110,6 +4133,12 @@ static int stk600_xprog_paged_write(PROGRAMMER * pgm, AVRPART * p, AVRMEM * mem,
     } else if (strncmp(mem->desc, "fuse", strlen("fuse")) == 0) {
         memtype = XPRG_MEM_TYPE_FUSE;
         writemode = (1 << XPRG_MEM_WRITE_WRITE);
+        if (p->flags & AVRPART_HAS_TPI)
+            /*
+             * TPI devices need a mystic erase prior to writing their
+             * fuses.
+             */
+            need_erase = 1; 
     } else if (strncmp(mem->desc, "lock", strlen("lock")) == 0) {
         memtype = XPRG_MEM_TYPE_LOCKBITS;
         writemode = (1 << XPRG_MEM_WRITE_WRITE);
@@ -4138,6 +4167,19 @@ static int stk600_xprog_paged_write(PROGRAMMER * pgm, AVRPART * p, AVRMEM * mem,
         return -1;
     }
 
+    if (need_erase) {
+        b[0] = XPRG_CMD_ERASE;
+        b[1] = XPRG_ERASE_CONFIG;
+        b[2] = mem->offset >> 24;
+        b[3] = mem->offset >> 16;
+        b[4] = mem->offset >> 8;
+        b[5] = mem->offset + 1;
+        if (stk600_xprog_command(pgm, b, 6, 2) < 0) {
+          avrdude_message(MSG_INFO, "%s: stk600_xprog_chip_erase(): XPRG_CMD_ERASE(XPRG_ERASE_CONFIG) failed\n",
+                            progname);
+          return -1;
+      }
+    }
     while (n_bytes != 0) {
 
 	if (dynamic_memtype)
